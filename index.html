@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Island Crafter — 2D無人島クラフト</title>
+  <style>
+    :root {
+      --bg: #0b0f1a;
+      --panel: #121827;
+      --panel-2: #0e1420;
+      --accent: #66e0a3;
+      --accent-2: #4dd2ff;
+      --text: #e8eef9;
+      --muted: #8aa0bd;
+      --danger: #ff6b6b;
+      --good: #a3ff6a;
+      --warn: #ffd166;
+    }
+    html, body {
+      margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+      height: 100%; overflow: hidden;
+    }
+    #wrap { display: grid; grid-template-columns: 1fr 300px; grid-template-rows: 1fr; height: 100vh; }
+    #left { position: relative; background: #03060d; }
+    #right { background: linear-gradient(180deg, var(--panel), var(--panel-2)); border-left: 1px solid #1d2740; padding: 12px; overflow: auto; }
+    #game { display:block; width:100%; height:100%; image-rendering: pixelated; }
+
+    .hud { position: absolute; left: 12px; top: 12px; display: flex; gap: 10px; align-items: center; }
+    .chip { background: rgba(5,10,20,.6); border: 1px solid #1f2b45; padding: 6px 10px; border-radius: 10px; font-size: 12px; }
+    .bar { height: 8px; width: 140px; background: #233050; border-radius: 999px; overflow: hidden; border: 1px solid #3a4b75; }
+    .bar .fill { height: 100%; background: linear-gradient(90deg, var(--accent), #79ffa5); }
+    .bar.energy .fill { background: linear-gradient(90deg, #ffe066, #ffd166); }
+    .bar.hunger .fill { background: linear-gradient(90deg, #ff8a6b, #ff6b6b); }
+
+    .hotbar { position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px; display:flex; gap:6px; }
+    .slot { width: 46px; height: 46px; border-radius: 10px; border: 1px solid #2b3a60; background: rgba(10,15,25,.75); position: relative; }
+    .slot.active { outline: 2px solid var(--accent); }
+    .slot .count { position: absolute; right: 6px; bottom: 2px; font-size: 12px; color: #cfe2ff; text-shadow: 0 1px 0 rgba(0,0,0,.6); }
+    .slot canvas { width: 100%; height: 100%; }
+
+    .panel { background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,.005)); border: 1px solid #263554; border-radius: 16px; padding: 12px; margin-bottom: 12px; box-shadow: 0 12px 30px rgba(0,0,0,.25); }
+    .panel h2 { margin: 0 0 8px; font-size: 15px; letter-spacing: .2px; color: var(--muted); font-weight: 700; }
+    .panel .row { display:flex; align-items:center; gap:8px; }
+    .btn { background: #101a2e; border:1px solid #263a66; color: var(--text); padding: 8px 10px; border-radius: 10px; cursor: pointer; font-size: 13px; }
+    .btn:hover { filter: brightness(1.2); }
+    .btn.acc { background: #12283b; border-color: #1f6fb2; }
+
+    .grid { display:grid; grid-template-columns: repeat(8, 1fr); gap:8px; }
+    .cell { background: #0c1324; border:1px solid #233050; border-radius: 12px; height:48px; position:relative; }
+    .cell .count { position:absolute; right:6px; bottom:4px; font-size:12px; color:#cfe2ff; }
+
+    .modal { position: absolute; inset: 0; display:none; align-items: center; justify-content: center; background: rgba(0,0,0,.55); }
+    .modal.show { display:flex; }
+    .modal .sheet { width: min(760px, 92vw); max-height: 88vh; overflow: auto; }
+
+    .recipe { display:grid; grid-template-columns: 1fr auto; align-items:center; gap:10px; padding:8px; border:1px solid #223253; border-radius:12px; background:#0b1222; margin-bottom:8px; }
+    .recipe .need { font-size:12px; color:#9fb2d5; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #233050; font-size:11px; color:#b6c6e5; margin-right:6px; }
+
+    .footer { font-size: 12px; color: #93a6c7; opacity: .9; }
+
+    #minimap { width: 100%; height: 140px; border-radius: 12px; border:1px solid #223253; background: #050910; display:block; }
+
+    .kbd { padding: 2px 6px; border-radius: 6px; border:1px solid #2b3a60; background:#0d1628; font-size: 12px; }
+
+    .right-sticky { position: sticky; top: 8px; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="left">
+      <canvas id="game"></canvas>
+      <div class="hud">
+        <div class="chip">Day <span id="day">1</span> — <span id="time">06:00</span></div>
+        <div class="chip">Season <span id="season">Spring</span></div>
+        <div class="chip">Weather <span id="weather">Clear</span></div>
+        <div class="chip">Seed <span id="seedlabel"></span></div>
+      </div>
+      <div class="hotbar" id="hotbar"></div>
+
+      <div class="modal" id="modalInventory">
+        <div class="sheet panel">
+          <h2>インベントリ (<span id="invWeight">0</span> / <span id="invMax">0</span>)</h2>
+          <div id="inventory" class="grid"></div>
+          <div class="row" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+            <button class="btn acc" id="btnSort">自動整頓</button>
+            <button class="btn" id="btnDrop">選択スロットを捨てる</button>
+            <button class="btn" id="btnCloseInv">閉じる (E)</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal" id="modalCraft">
+        <div class="sheet panel">
+          <h2>クラフト (C)</h2>
+          <div id="craftList"></div>
+          <div class="row" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+            <span class="tag">作業台: より多くのレシピ</span>
+            <span class="tag">かまど: 鉱石 → 延べ棒</span>
+            <button class="btn" id="btnCloseCraft">閉じる (C)</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal" id="modalBuild">
+        <div class="sheet panel">
+          <h2>建築 (B)</h2>
+          <div id="buildList"></div>
+          <div class="row" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+            <button class="btn" id="btnCloseBuild">閉じる (B)</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal" id="modalHelp">
+        <div class="sheet panel">
+          <h2>Island Crafter — 操作/遊び方</h2>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+            <div class="panel">
+              <h2>基本操作</h2>
+              <p><span class="kbd">WASD</span> で移動、<span class="kbd">マウス左</span>で採取/攻撃、<span class="kbd">右</span>で設置/使用。</p>
+              <p><span class="kbd">E</span> インベントリ、<span class="kbd">C</span> クラフト、<span class="kbd">B</span> 建築、<span class="kbd">1-9</span> ホットバー。</p>
+              <p>木は <strong>斧</strong>、岩/鉱石は <strong>つるはし</strong>、土は <strong>シャベル</strong> が効率的。</p>
+            </div>
+            <div class="panel">
+              <h2>目標</h2>
+              <p>資源を集め、<em>作業台</em>・<em>かまど</em>・<em>かがり火</em>・<em>畑</em>・<em>宝箱</em> を建てて島を発展。</p>
+              <p>空腹/体力/気力に注意。日が暮れると暗くなるので、光源を用意。</p>
+            </div>
+          </div>
+          <div class="row" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+            <button class="btn" id="btnCloseHelp">閉じる (H)</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div id="right">
+      <div class="right-sticky">
+        <div class="panel">
+          <h2>セーブ/ロード</h2>
+          <div class="row" style="gap:8px; flex-wrap:wrap;">
+            <button class="btn acc" id="btnSave">セーブ</button>
+            <button class="btn" id="btnLoad">ロード</button>
+            <button class="btn" id="btnNew">新規島生成</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>情報</h2>
+          <canvas id="minimap" width="280" height="140"></canvas>
+          <div class="row" style="justify-content:space-between; margin-top:8px;">
+            <div>
+              <div>季節: <span id="uiSeason">Spring</span></div>
+              <div>天気: <span id="uiWeather">Clear</span></div>
+            </div>
+            <div>
+              <button class="btn" id="btnHelp">ヘルプ (H)</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>現在選択中</h2>
+          <div id="selectedInfo" class="footer">—</div>
+        </div>
+        <div class="panel footer">
+          <div>© 2025 Island Crafter — オフライン対応/単一HTML。ローカルの <code>localStorage</code> にセーブされます。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  // =============================
+  // Utility / RNG
+  // =============================
+  const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+  const lerp = (a,b,t)=>a+(b-a)*t;
+  function mulberry32(seed) { let t = seed >>> 0; return function() { t += 0x6D2B79F5; let r = Math.imul(t ^ (t >>> 15), 1 | t); r ^= r + Math.imul(r ^ (r >>> 7), 61 | r); return ((r ^ (r >>> 14)) >>> 0) / 4294967296; }; }
+  function seededFloat(seed, x, y) { // simple 2D hash RNG
+    let h = (x * 374761393 + y * 668265263 + seed * 1442695040888963407n) % 0xffffffffn;
+    // convert BigInt to number pseudo-randomly
+    const n = Number(h & 0xffffffffn);
+    const r = Math.sin(n) * 43758.5453; return r - Math.floor(r);
+  }
+  function key(x,y){ return x+","+y; }
+
+  // =============================
+  // Constants / Data
+  // =============================
+  const TILE = 24; // tile size (world draws scaled)
+  const WORLD_SIZE = 160; // 160x160 tiles
+  const SCREEN_SCALE = 2; // zoom
+  const HOTBAR_SIZE = 9;
+  const INV_COLS = 8, INV_ROWS = 6;
+  const MAX_STACK = 99;
+
+  const Seasons = ["Spring","Summer","Autumn","Winter"]; // visual only for now
+
+  const Tile = {
+    WATER: 0,
+    SAND: 1,
+    GRASS: 2,
+    FOREST: 3,
+    ROCK: 4,
+    MOUNTAIN: 5,
+  };
+  const TileColor = {
+    [Tile.WATER]: "#0b3d66",
+    [Tile.SAND]: "#d2c58b",
+    [Tile.GRASS]: "#2f7d49",
+    [Tile.FOREST]: "#1f5a33",
+    [Tile.ROCK]: "#8a8f99",
+    [Tile.MOUNTAIN]: "#6b6f79",
+  };
+
+  const Item = {
+    WOOD: 'wood', STONE: 'stone', FIBER: 'fiber', BERRY: 'berry',
+    COPPER_ORE: 'copper_ore', IRON_ORE: 'iron_ore', GOLD_ORE: 'gold_ore',
+    COPPER_BAR: 'copper_bar', IRON_BAR: 'iron_bar', GOLD_BAR: 'gold_bar',
+    STICK: 'stick', ROPE: 'rope', COAL: 'coal', CLAY: 'clay', SAND: 'sand_item', GLASS: 'glass',
+    AXE_WOOD: 'axe_wood', PICK_WOOD: 'pick_wood', SHOVEL_WOOD: 'shovel_wood',
+    AXE_COPPER: 'axe_copper', PICK_COPPER: 'pick_copper', SHOVEL_COPPER: 'shovel_copper',
+    AXE_IRON: 'axe_iron', PICK_IRON: 'pick_iron', SHOVEL_IRON: 'shovel_iron',
+    TORCH: 'torch', SEED: 'seed', WHEAT: 'wheat', FLOUR: 'flour', BREAD: 'bread',
+    FISH: 'fish', RAW_FISH: 'raw_fish', WATERING: 'wateringcan', BUCKET: 'bucket',
+    CAMPFIRE: 'campfire', WORKBENCH: 'workbench', FURNACE: 'furnace', CHEST: 'chest', FARM: 'farmplot', LAMP: 'lamp', WALL_WOOD: 'wall_wood', FLOOR_WOOD: 'floor_wood'
+  };
+  const ItemInfo = {
+    [Item.WOOD]: {name:'木材', weight:.5, icon:'#8b5a2b'},
+    [Item.STONE]: {name:'石', weight:1, icon:'#a0a7b3'},
+    [Item.FIBER]: {name:'繊維', weight:.2, icon:'#9fd38a'},
+    [Item.BERRY]: {name:'ベリー', weight:.1, icon:'#c94a6a', eat:{hunger:12, energy:6, hp:2}},
+    [Item.COPPER_ORE]: {name:'銅鉱石', weight:1, icon:'#b4753b'},
+    [Item.IRON_ORE]: {name:'鉄鉱石', weight:1, icon:'#9aa2ad'},
+    [Item.GOLD_ORE]: {name:'金鉱石', weight:1, icon:'#e0c24d'},
+    [Item.COPPER_BAR]: {name:'銅インゴット', weight:1, icon:'#cc8446'},
+    [Item.IRON_BAR]: {name:'鉄インゴット', weight:1, icon:'#b3bbc6'},
+    [Item.GOLD_BAR]: {name:'金インゴット', weight:1, icon:'#f5cf4d'},
+    [Item.STICK]: {name:'棒', weight:.1, icon:'#7a4f2b'},
+    [Item.ROPE]: {name:'ロープ', weight:.2, icon:'#b69f6b'},
+    [Item.COAL]: {name:'石炭', weight:.5, icon:'#2a2a2a', fuel:20},
+    [Item.CLAY]: {name:'粘土', weight:.6, icon:'#a05a3b'},
+    [Item.SAND]: {name:'砂', weight:.6, icon:'#e2d9a8'},
+    [Item.GLASS]: {name:'ガラス', weight:.6, icon:'#cbe7ff'},
+    [Item.AXE_WOOD]: {name:'木の斧', weight:2, icon:'#c08b59', tool:{type:'axe', power:1, dur:180}},
+    [Item.PICK_WOOD]: {name:'木のつるはし', weight:2, icon:'#b7a07a', tool:{type:'pick', power:1, dur:180}},
+    [Item.SHOVEL_WOOD]: {name:'木のシャベル', weight:1.5, icon:'#b7a07a', tool:{type:'shovel', power:1, dur:180}},
+    [Item.AXE_COPPER]: {name:'銅の斧', weight:2, icon:'#d78a4d', tool:{type:'axe', power:2, dur:360}},
+    [Item.PICK_COPPER]: {name:'銅のつるはし', weight:2, icon:'#d78a4d', tool:{type:'pick', power:2, dur:360}},
+    [Item.SHOVEL_COPPER]: {name:'銅のシャベル', weight:2, icon:'#d78a4d', tool:{type:'shovel', power:2, dur:360}},
+    [Item.AXE_IRON]: {name:'鉄の斧', weight:2.2, icon:'#b8c2cd', tool:{type:'axe', power:3, dur:600}},
+    [Item.PICK_IRON]: {name:'鉄のつるはし', weight:2.2, icon:'#b8c2cd', tool:{type:'pick', power:3, dur:600}},
+    [Item.SHOVEL_IRON]: {name:'鉄のシャベル', weight:2.0, icon:'#b8c2cd', tool:{type:'shovel', power:3, dur:600}},
+    [Item.TORCH]: {name:'たいまつ', weight:.2, icon:'#ffb347', light:4},
+    [Item.SEED]: {name:'種', weight:.1, icon:'#9acd58'},
+    [Item.WHEAT]: {name:'小麦', weight:.1, icon:'#d3bf62', eat:{hunger:8, energy:4}},
+    [Item.FLOUR]: {name:'小麦粉', weight:.2, icon:'#f1f1f1'},
+    [Item.BREAD]: {name:'パン', weight:.3, icon:'#e3bf78', eat:{hunger:30, energy:12}},
+    [Item.RAW_FISH]: {name:'生魚', weight:.5, icon:'#7bb0e0'},
+    [Item.FISH]: {name:'焼き魚', weight:.5, icon:'#a3d0ff', eat:{hunger:38, energy:16, hp:4}},
+    [Item.WATERING]: {name:'ジョウロ', weight:1.2, icon:'#7bb0e0'},
+    [Item.BUCKET]: {name:'バケツ', weight:1.5, icon:'#a0a7b3'},
+    [Item.CAMPFIRE]: {name:'かがり火', weight:3, icon:'#ff9f43', structure:'campfire'},
+    [Item.WORKBENCH]: {name:'作業台', weight:5, icon:'#8b5a2b', structure:'workbench'},
+    [Item.FURNACE]: {name:'かまど', weight:6, icon:'#a0a7b3', structure:'furnace'},
+    [Item.CHEST]: {name:'宝箱', weight:8, icon:'#8b5a2b', structure:'chest'},
+    [Item.FARM]: {name:'畑', weight:2, icon:'#7a5f3b', structure:'farm'},
+    [Item.LAMP]: {name:'ランプ', weight:1.5, icon:'#ffd166', structure:'lamp'},
+    [Item.WALL_WOOD]: {name:'木の壁', weight:2, icon:'#6e4b2b', structure:'wall'},
+    [Item.FLOOR_WOOD]: {name:'木の床', weight:2, icon:'#aa7a4b', structure:'floor'},
+  };
+
+  // Structures
+  const Structures = {
+    campfire: {name:'かがり火', size:1, light:6, interact:'cook'},
+    workbench: {name:'作業台', size:1, interact:'bench'},
+    furnace: {name:'かまど', size:1, interact:'smelt'},
+    chest: {name:'宝箱', size:1, interact:'chest'},
+    farm: {name:'畑', size:1, interact:'farm'},
+    lamp: {name:'ランプ', size:1, light:8},
+    wall: {name:'木の壁', size:1},
+    floor: {name:'木の床', size:1},
+  };
+
+  // Crafting recipes (unlocked base; some require station)
+  const Recipes = [
+    { out: Item.STICK, n: 4, need: { [Item.WOOD]: 1 } },
+    { out: Item.ROPE, n: 1, need: { [Item.FIBER]: 3 } },
+    { out: Item.TORCH, n: 2, need: { [Item.STICK]: 1, [Item.COAL]: 1 } },
+    { station:'bench', out: Item.AXE_WOOD, n: 1, need: { [Item.STICK]: 2, [Item.WOOD]: 3 } },
+    { station:'bench', out: Item.PICK_WOOD, n: 1, need: { [Item.STICK]: 2, [Item.WOOD]: 3 } },
+    { station:'bench', out: Item.SHOVEL_WOOD, n: 1, need: { [Item.STICK]: 2, [Item.WOOD]: 3 } },
+    { station:'bench', out: Item.WORKBENCH, n: 1, need: { [Item.WOOD]: 10, [Item.STICK]: 4 } },
+    { station:'bench', out: Item.CAMPFIRE, n: 1, need: { [Item.STONE]: 8, [Item.WOOD]: 2 } },
+    { station:'bench', out: Item.CHEST, n: 1, need: { [Item.WOOD]: 12, [Item.ROPE]: 2 } },
+    { station:'bench', out: Item.FURNACE, n: 1, need: { [Item.STONE]: 16, [Item.CLAY]: 4 } },
+    { station:'bench', out: Item.FARM, n: 1, need: { [Item.WOOD]: 4, [Item.CLAY]: 2 } },
+    { station:'bench', out: Item.LAMP, n: 1, need: { [Item.GLASS]: 2, [Item.COAL]: 1 } },
+    { station:'bench', out: Item.WALL_WOOD, n: 4, need: { [Item.WOOD]: 4 } },
+    { station:'bench', out: Item.FLOOR_WOOD, n: 4, need: { [Item.WOOD]: 4 } },
+    { station:'bench', out: Item.AXE_COPPER, n: 1, need: { [Item.STICK]: 2, [Item.COPPER_BAR]: 2 } },
+    { station:'bench', out: Item.PICK_COPPER, n: 1, need: { [Item.STICK]: 2, [Item.COPPER_BAR]: 2 } },
+    { station:'bench', out: Item.SHOVEL_COPPER, n: 1, need: { [Item.STICK]: 2, [Item.COPPER_BAR]: 2 } },
+    { station:'bench', out: Item.AXE_IRON, n: 1, need: { [Item.STICK]: 2, [Item.IRON_BAR]: 2 } },
+    { station:'bench', out: Item.PICK_IRON, n: 1, need: { [Item.STICK]: 2, [Item.IRON_BAR]: 2 } },
+    { station:'bench', out: Item.SHOVEL_IRON, n: 1, need: { [Item.STICK]: 2, [Item.IRON_BAR]: 2 } },
+    { out: Item.WATERING, n: 1, need: { [Item.WOOD]: 2, [Item.IRON_BAR]: 1 } },
+    { out: Item.BUCKET, n: 1, need: { [Item.IRON_BAR]: 2 } },
+  ];
+
+  const Smelts = { // input -> output
+    [Item.COPPER_ORE]: Item.COPPER_BAR,
+    [Item.IRON_ORE]: Item.IRON_BAR,
+    [Item.GOLD_ORE]: Item.GOLD_BAR,
+    [Item.SAND]: Item.GLASS,
+    [Item.RAW_FISH]: Item.FISH,
+  };
+
+  // =============================
+  // Game State
+  // =============================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let W = 800, H = 600;
+  function resize() {
+    W = canvas.width = Math.floor(window.innerWidth * 0.7);
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const ui = {
+    day: document.getElementById('day'), time: document.getElementById('time'), season: document.getElementById('season'), weather: document.getElementById('weather'),
+    seedlabel: document.getElementById('seedlabel'),
+    hotbar: document.getElementById('hotbar'),
+    invModal: document.getElementById('modalInventory'), invGrid: document.getElementById('inventory'), invWeight: document.getElementById('invWeight'), invMax: document.getElementById('invMax'),
+    craftModal: document.getElementById('modalCraft'), craftList: document.getElementById('craftList'),
+    buildModal: document.getElementById('modalBuild'), buildList: document.getElementById('buildList'),
+    helpModal: document.getElementById('modalHelp'),
+    mini: document.getElementById('minimap'),
+    selectedInfo: document.getElementById('selectedInfo'),
+    uiSeason: document.getElementById('uiSeason'), uiWeather: document.getElementById('uiWeather'),
+  };
+  const mctx = ui.mini.getContext('2d');
+
+  const Keys = {};
+  window.addEventListener('keydown', e=>{ Keys[e.key.toLowerCase()] = true; if(['e','c','b','h'].includes(e.key.toLowerCase())) e.preventDefault(); });
+  window.addEventListener('keyup', e=>{ Keys[e.key.toLowerCase()] = false; });
+
+  const Mouse = {x:0,y:0, down:false, right:false};
+  canvas.addEventListener('mousemove', e=>{ const r=canvas.getBoundingClientRect(); Mouse.x=e.clientX-r.left; Mouse.y=e.clientY-r.top; });
+  canvas.addEventListener('mousedown', e=>{ if(e.button===0) Mouse.down=true; if(e.button===2) Mouse.right=true; });
+  canvas.addEventListener('mouseup', e=>{ if(e.button===0) Mouse.down=false; if(e.button===2) Mouse.right=false; });
+  canvas.addEventListener('contextmenu', e=> e.preventDefault());
+
+  // Inventory & items
+  function makeEmptyInv(){ return Array(INV_COLS*INV_ROWS).fill(null); }
+  function addItem(inv, id, n) {
+    const info = ItemInfo[id];
+    // stack existing
+    for (let i=0;i<inv.length;i++) if(inv[i] && inv[i].id===id && inv[i].n<MAX_STACK){ const space = MAX_STACK-inv[i].n; const take=Math.min(space,n); inv[i].n+=take; n-=take; if(n<=0) return true; }
+    // new slots
+    for (let i=0;i<inv.length;i++) if(!inv[i]){ const put=Math.min(MAX_STACK,n); inv[i]={id, n:put, dur:info.tool?info.tool.dur:undefined}; n-=put; if(n<=0) return true; }
+    return n<=0; // false if overflow
+  }
+  function removeItems(inv, need) {
+    // need: {id: n}
+    // check
+    for (const id in need){ const n=need[id]; let have=0; for (const it of inv) if(it && it.id===id) have+=it.n; if(have<n) return false; }
+    // consume
+    for (const id in need){ let n=need[id]; for (let i=0;i<inv.length&&n>0;i++){ const it=inv[i]; if(it && it.id===id){ const take=Math.min(it.n,n); it.n-=take; n-=take; if(it.n<=0) inv[i]=null; } } }
+    return true;
+  }
+  function inventoryWeight(inv){ let w=0; for(const it of inv) if(it){ w+=ItemInfo[it.id].weight * it.n; } return w; }
+
+  // Hotbar is first row of inventory
+  let selectedSlot = 0;
+
+  // Player/state
+  const State = {
+    seed: Math.floor(Math.random()*1e9)>>>0,
+    time: 6*60, // minutes in day, start 6:00
+    day: 1,
+    season: 0,
+    weather: 0, // 0 clear, 1 rain
+    player: { x: 0, y: 0, hp: 100, hunger: 100, energy: 100, speed: 2.1 },
+    inv: makeEmptyInv(),
+    world: { tiles: new Uint8Array(WORLD_SIZE*WORLD_SIZE), height: new Float32Array(WORLD_SIZE*WORLD_SIZE) },
+    nodes: {}, // key("x,y") -> node {type, x,y, hp}
+    drops: [], // dropped items in world {x,y,id,n,ttl}
+    structures: [], // {x,y,type, data}
+  };
+
+  // World gen
+  function genWorld(seed){
+    State.seed = seed>>>0; ui.seedlabel.textContent = String(State.seed);
+    const center = WORLD_SIZE/2;
+    for (let y=0;y<WORLD_SIZE;y++){
+      for (let x=0;x<WORLD_SIZE;x++){
+        const dx = (x-center)/(WORLD_SIZE/2);
+        const dy = (y-center)/(WORLD_SIZE/2);
+        const d = Math.sqrt(dx*dx+dy*dy);
+        let r = 1 - d; // island mask
+        const jitter = (seededFloat(BigInt(seed), x, y)-.5)*0.35;
+        let h = r + jitter; // height
+        State.world.height[y*WORLD_SIZE+x] = h;
+        let t = Tile.WATER;
+        if (h>0.02) t = Tile.SAND;
+        if (h>0.07) t = Tile.GRASS;
+        if (h>0.15) t = Tile.FOREST;
+        if (h>0.28) t = Tile.ROCK;
+        if (h>0.40) t = Tile.MOUNTAIN;
+        State.world.tiles[y*WORLD_SIZE+x] = t;
+      }
+    }
+    // Place resource nodes deterministically
+    State.nodes = {};
+    function placeNode(chance, type, hp){
+      for(let y=0;y<WORLD_SIZE;y++) for(let x=0;x<WORLD_SIZE;x++){
+        const t = State.world.tiles[y*WORLD_SIZE+x];
+        const rnd = seededFloat(BigInt(seed+type.length), x*73856093 ^ y*19349663, y*83492791 ^ x*2971215073);
+        if (rnd < chance) {
+          if ((type==='tree' && (t===Tile.FOREST||t===Tile.GRASS)) ||
+              (type==='rock' && (t===Tile.ROCK||t===Tile.MOUNTAIN)) ||
+              (type==='copper' && (t===Tile.ROCK||t===Tile.MOUNTAIN)) ||
+              (type==='iron' && (t===Tile.MOUNTAIN)) ||
+              (type==='gold' && (t===Tile.MOUNTAIN)) ||
+              (type==='bush' && (t===Tile.GRASS||t===Tile.FOREST)) ||
+              (type==='clay' && (t===Tile.SAND))) {
+            State.nodes[key(x,y)] = {type, x, y, hp};
+          }
+        }
+      }
+    }
+    placeNode(0.035,'tree', 20);
+    placeNode(0.018,'rock', 24);
+    placeNode(0.010,'copper', 16);
+    placeNode(0.007,'iron', 22);
+    placeNode(0.004,'gold', 28);
+    placeNode(0.020,'bush', 10);
+    placeNode(0.012,'clay', 12);
+
+    // Find spawn on grass
+    for(let i=0;i<5000;i++){
+      const sx = Math.floor(center + (Math.random()-.5)*WORLD_SIZE*0.4);
+      const sy = Math.floor(center + (Math.random()-.5)*WORLD_SIZE*0.4);
+      const t = State.world.tiles[sy*WORLD_SIZE+sx];
+      if (t===Tile.GRASS||t===Tile.FOREST||t===Tile.ROCK) { State.player.x=sx+0.5; State.player.y=sy+0.5; break; }
+    }
+
+    // Starter items
+    State.inv = makeEmptyInv();
+    addItem(State.inv, Item.BERRY, 4);
+    addItem(State.inv, Item.STICK, 4);
+    addItem(State.inv, Item.AXE_WOOD, 1);
+    addItem(State.inv, Item.PICK_WOOD, 1);
+    addItem(State.inv, Item.SHOVEL_WOOD, 1);
+
+    State.structures = [];
+    State.drops = [];
+    State.time = 6*60; State.day=1; State.season=0; State.weather=0;
+    rebuildUI();
+    drawMinimap();
+  }
+
+  function tileAt(x,y){ if(x<0||y<0||x>=WORLD_SIZE||y>=WORLD_SIZE) return Tile.WATER; return State.world.tiles[(y|0)*WORLD_SIZE+(x|0)]; }
+
+  // =============================
+  // Rendering
+  // =============================
+  function drawWorld() {
+    const tilePix = TILE*SCREEN_SCALE;
+    const cam = { x: State.player.x*tilePix - W/2, y: State.player.y*tilePix - H/2 };
+    const startX = Math.floor(cam.x / tilePix)-2; const endX = Math.ceil((cam.x+W)/tilePix)+2;
+    const startY = Math.floor(cam.y / tilePix)-2; const endY = Math.ceil((cam.y+H)/tilePix)+2;
+
+    // tiles
+    for (let ty=startY; ty<endY; ty++){
+      for (let tx=startX; tx<endX; tx++){
+        const t = tileAt(tx,ty);
+        ctx.fillStyle = TileColor[t]||'#000';
+        const px = tx*tilePix - cam.x; const py = ty*tilePix - cam.y;
+        ctx.fillRect(px, py, tilePix, tilePix);
+      }
+    }
+
+    // structures
+    for (const s of State.structures){
+      const px = s.x*tilePix - cam.x; const py = s.y*tilePix - cam.y;
+      ctx.fillStyle = {campfire:'#ff9f43', workbench:'#8b5a2b', furnace:'#a0a7b3', chest:'#b27a3a', farm:'#6a4b2a', lamp:'#ffd166', wall:'#6e4b2b', floor:'#aa7a4b'}[s.type]||'#fff';
+      ctx.fillRect(px+4, py+4, tilePix-8, tilePix-8);
+    }
+
+    // nodes (trees/rocks/ores/bush/clay)
+    for (const k in State.nodes){ const n = State.nodes[k]; const px=n.x*tilePix - cam.x; const py=n.y*tilePix - cam.y; let col='#fff';
+      if(n.type==='tree') col='#2e7a44'; else if(n.type==='rock') col='#9aa2ad'; else if(n.type==='copper') col='#c47a3b'; else if(n.type==='iron') col='#b0b8c3'; else if(n.type==='gold') col='#f2cd4c'; else if(n.type==='bush') col='#7fbf5f'; else if(n.type==='clay') col='#a05a3b';
+      ctx.fillStyle = col; ctx.fillRect(px+6,py+6,tilePix-12,tilePix-12);
+    }
+
+    // drops
+    for (const d of State.drops){ const px=d.x*tilePix - cam.x; const py=d.y*tilePix - cam.y; ctx.fillStyle=ItemInfo[d.id].icon; ctx.fillRect(px+8,py+8, tilePix-16, tilePix-16); }
+
+    // player
+    const px = State.player.x*tilePix - cam.x; const py = State.player.y*tilePix - cam.y;
+    ctx.fillStyle = '#e6eef9'; ctx.fillRect(px-8, py-10, 16, 20);
+
+    // time lighting
+    const dayMin = State.time; // 0..1440
+    const daylight = Math.max(0, Math.cos((dayMin/1440)*Math.PI*2 - Math.PI)); // 0..1 night at 0, day at 1
+    const night = 1-daylight; // 0..1
+    ctx.fillStyle = `rgba(0,0,0,${0.6*night + (State.weather===1?0.15:0)})`;
+    ctx.fillRect(0,0,W,H);
+
+    // simple light around player/lamps
+    function lightAt(wx,wy, radius){ const lpx=wx*tilePix - cam.x; const lpy=wy*tilePix - cam.y; const r = radius*tilePix; const grad = ctx.createRadialGradient(lpx,lpy, 0, lpx,lpy, r); grad.addColorStop(0,'rgba(255,230,180,0.65)'); grad.addColorStop(1,'rgba(0,0,0,0)'); ctx.globalCompositeOperation='lighter'; ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(lpx,lpy,r,0,Math.PI*2); ctx.fill(); ctx.globalCompositeOperation='source-over'; }
+    lightAt(State.player.x, State.player.y, 1.6);
+    for (const s of State.structures){ const def = Structures[s.type]; if(def.light) lightAt(s.x+0.5, s.y+0.5, def.light/6); }
+  }
+
+  // =============================
+  // Minimap
+  // =============================
+  function drawMinimap(){
+    const mmw = ui.mini.width, mmh = ui.mini.height; const sx = WORLD_SIZE/mmw, sy = WORLD_SIZE/mmh;
+    const img = mctx.createImageData(mmw, mmh);
+    for (let y=0;y<mmh;y++){
+      for (let x=0;x<mmw;x++){
+        const wx = Math.floor(x*sx), wy = Math.floor(y*sy);
+        const t = tileAt(wx,wy);
+        const c = hexToRgb(TileColor[t]);
+        const i = (y*mmw + x)*4; img.data[i]=c.r; img.data[i+1]=c.g; img.data[i+2]=c.b; img.data[i+3]=255;
+      }
+    }
+    mctx.putImageData(img,0,0);
+  }
+  function hexToRgb(h){ const r = parseInt(h.slice(1,3),16), g=parseInt(h.slice(3,5),16), b=parseInt(h.slice(5,7),16); return {r,g,b}; }
+
+  // =============================
+  // Interaction / Logic
+  // =============================
+  function currentTool(){ const it = State.inv[selectedSlot]; if(!it) return null; const info = ItemInfo[it.id]; return info.tool ? {slot:selectedSlot, item:it, info} : null; }
+
+  function useLeftClick(){ // harvest / attack / dig
+    const tilePix = TILE*SCREEN_SCALE; const cam = { x: State.player.x*tilePix - W/2, y: State.player.y*tilePix - H/2 };
+    const wx = Math.floor((Mouse.x + cam.x)/tilePix); const wy = Math.floor((Mouse.y + cam.y)/tilePix);
+    const dist = Math.hypot(wx + .5 - State.player.x, wy + .5 - State.player.y);
+    if (dist>2.2) return; // out of reach
+
+    const tool = currentTool();
+    // Node harvesting
+    const k = key(wx,wy); const n = State.nodes[k];
+    if (n){
+      let eff = 0, loot=null;
+      if(n.type==='tree' && tool && tool.info.tool.type==='axe') eff = 1*tool.info.tool.power, loot=Item.WOOD;
+      if(n.type==='rock' && tool && tool.info.tool.type==='pick') eff = 1*tool.info.tool.power, loot=Item.STONE;
+      if(n.type==='copper' && tool && tool.info.tool.type==='pick') eff = 1*tool.info.tool.power, loot=Item.COPPER_ORE;
+      if(n.type==='iron' && tool && tool.info.tool.type==='pick') eff = 1*tool.info.tool.power, loot=Item.IRON_ORE;
+      if(n.type==='gold' && tool && tool.info.tool.type==='pick') eff = 1*tool.info.tool.power, loot=Item.GOLD_ORE;
+      if(n.type==='bush') { eff = 2; loot = Item.BERRY; }
+      if(n.type==='clay' && tool && tool.info.tool.type==='shovel') { eff = 1*tool.info.tool.power; loot = Item.CLAY; }
+      if (eff>0){ n.hp -= eff; State.player.energy = Math.max(0, State.player.energy - 0.6);
+        // tool dur
+        if(tool){ tool.item.dur--; if(tool.item.dur<=0){ State.inv[tool.slot]=null; selectedSlot=0; }
+        }
+        if (n.hp<=0){ delete State.nodes[k]; drop(wx+.5, wy+.5, loot, 1+Math.floor(Math.random()*2)); if(n.type==='tree'&&Math.random()<0.35) drop(wx+.5, wy+.5, Item.FIBER, 1+Math.floor(Math.random()*2)); if(n.type==='rock'&&Math.random()<0.25) drop(wx+.5, wy+.5, Item.COAL, 1); if(n.type==='bush'&&Math.random()<0.25) drop(wx+.5,wy+.5, Item.SEED, 1); }
+      }
+    }
+    else {
+      // Eat if edible in hand
+      const it = State.inv[selectedSlot]; if(it && ItemInfo[it.id].eat){
+        const e = ItemInfo[it.id].eat; State.player.hunger = clamp(State.player.hunger + (e.hunger||0),0,100); State.player.energy = clamp(State.player.energy + (e.energy||0),0,100); State.player.hp = clamp(State.player.hp + (e.hp||0),0,100); it.n--; if(it.n<=0) State.inv[selectedSlot]=null; return;
+      }
+    }
+  }
+
+  function useRightClick(){ // place / interact
+    const tilePix = TILE*SCREEN_SCALE; const cam = { x: State.player.x*tilePix - W/2, y: State.player.y*tilePix - H/2 };
+    const wx = Math.floor((Mouse.x + cam.x)/tilePix); const wy = Math.floor((Mouse.y + cam.y)/tilePix);
+    const dist = Math.hypot(wx + .5 - State.player.x, wy + .5 - State.player.y);
+    if (dist>2.2) return;
+
+    // If structure present, open its UI (simplified as action)
+    const s = State.structures.find(s=>s.x===wx&&s.y===wy);
+    if (s){ interactStructure(s); return; }
+
+    const it = State.inv[selectedSlot]; if(!it) return; const info = ItemInfo[it.id];
+    if(info.structure){ // place structure
+      // cannot place on water
+      const t = tileAt(wx,wy); if(t===Tile.WATER) return; if(State.nodes[key(wx,wy)]) return; if(State.structures.some(s=>s.x===wx&&s.y===wy)) return;
+      State.structures.push({x:wx, y:wy, type: info.structure, data:{fuel:0, input:null}});
+      it.n--; if(it.n<=0) State.inv[selectedSlot]=null;
+      drawMinimap();
+    }
+  }
+
+  function interactStructure(s){
+    if (s.type==='campfire'){
+      // cook: raw_fish -> fish, berry -> jam (not implemented), requires any fuel
+      const hasFuel = s.data.fuel>0;
+      if (!hasFuel){
+        // try to add fuel from inventory (coal or wood)
+        const fuelItems = [Item.COAL, Item.WOOD];
+        for (const fid of fuelItems){
+          for (let i=0;i<State.inv.length;i++){ const it=State.inv[i]; if(it && it.id===fid){ const add=Math.min(5, it.n); it.n-=add; if(it.n<=0) State.inv[i]=null; s.data.fuel += add*(fid===Item.COAL?20:5); break; } }
+          if (s.data.fuel>0) break;
+        }
+      } else {
+        // try to cook raw fish or berry -> bread? We'll cook RAW_FISH only for now
+        let cooked=false; for (let i=0;i<State.inv.length;i++){ const it=State.inv[i]; if(it && it.id===Item.RAW_FISH){ it.n--; if(it.n<=0) State.inv[i]=null; addItem(State.inv, Item.FISH, 1); s.data.fuel=Math.max(0,s.data.fuel-2); cooked=true; break; } }
+        if(!cooked){ /* no raw fish */ }
+      }
+    } else if (s.type==='furnace'){
+      if (!s.data.fuel){ // add fuel auto
+        for (let i=0;i<State.inv.length;i++){ const it=State.inv[i]; if(it && (it.id===Item.COAL||it.id===Item.WOOD)){ const add=Math.min(5, it.n); it.n-=add; if(it.n<=0) State.inv[i]=null; s.data.fuel += add*(it.id===Item.COAL?20:5); break; } }
+      }
+      // smelt: pick any smeltable item
+      for (let i=0;i<State.inv.length;i++){ const it=State.inv[i]; if(it && Smelts[it.id] && s.data.fuel>0){ const out = Smelts[it.id]; it.n--; if(it.n<=0) State.inv[i]=null; addItem(State.inv, out, 1); s.data.fuel=Math.max(0,s.data.fuel-3); break; } }
+    } else if (s.type==='chest'){
+      // simple: move selected stack into chest or back (chest has 12 slots)
+      if (!s.data.inv) s.data.inv = Array(12).fill(null);
+      // move from player selected to chest if possible, else pull one stack from chest back
+      const ps = State.inv[selectedSlot];
+      if (ps){ // push to chest
+        addItem(s.data.inv, ps.id, ps.n); State.inv[selectedSlot]=null;
+      } else {
+        // pull first stack
+        for (let i=0;i<s.data.inv.length;i++){ if(s.data.inv[i]){ addItem(State.inv, s.data.inv[i].id, s.data.inv[i].n); s.data.inv[i]=null; break; } }
+      }
+    } else if (s.type==='farm'){
+      // plant or harvest
+      const k = 'growth'; if (!s.data[k]) s.data[k]=0;
+      const hold = State.inv[selectedSlot];
+      if (s.data[k]<=0 && hold && hold.id===Item.SEED){ hold.n--; if(hold.n<=0) State.inv[selectedSlot]=null; s.data[k]=0.01; }
+      else if (s.data[k]>=1){ drop(s.x+.5, s.y+.5, Item.WHEAT, 2); s.data[k]=0; if(Math.random()<0.5) drop(s.x+.5,s.y+.5, Item.SEED, 1); }
+    }
+  }
+
+  function drop(x,y,id,n){ State.drops.push({x,y,id,n,ttl:60*20}); }
+
+  function pickDrops(){ for (const d of State.drops){ const dist = Math.hypot(d.x - State.player.x, d.y - State.player.y); if (dist<0.9){ if(addItem(State.inv, d.id, d.n)) d.ttl=0; } d.ttl--; }
+    State.drops = State.drops.filter(d=>d.ttl>0); }
+
+  // =============================
+  // UI build
+  // =============================
+  function rebuildUI(){ buildHotbar(); buildInventory(); buildCraftList(); buildBuildList(); }
+
+  function buildHotbar(){ ui.hotbar.innerHTML=''; for(let i=0;i<HOTBAR_SIZE;i++){ const div=document.createElement('div'); div.className='slot'+(i===selectedSlot?' active':''); const it=State.inv[i]; if(it){ const c=document.createElement('canvas'); c.width=46; c.height=46; const g=c.getContext('2d'); g.fillStyle=ItemInfo[it.id].icon; g.fillRect(8,8,30,30); div.appendChild(c); const count=document.createElement('div'); count.className='count'; count.textContent=it.n; div.appendChild(count); }
+      ((idx)=>{ div.addEventListener('click',()=>{ selectedSlot=idx; buildHotbar(); updateSelectedInfo(); }); })(i);
+      ui.hotbar.appendChild(div); }
+    updateSelectedInfo(); }
+
+  function buildInventory(){ ui.invGrid.innerHTML=''; ui.invMax.textContent = (INV_COLS*INV_ROWS*1).toFixed(0); ui.invWeight.textContent = inventoryWeight(State.inv).toFixed(1);
+    for(let i=0;i<INV_COLS*INV_ROWS;i++){ const cell=document.createElement('div'); cell.className='cell'; const it=State.inv[i]; if(it){ const c=document.createElement('canvas'); c.width=48; c.height=48; const g=c.getContext('2d'); g.fillStyle=ItemInfo[it.id].icon; g.fillRect(10,10,28,28); cell.appendChild(c); const count=document.createElement('div'); count.className='count'; count.textContent=it.n+(ItemInfo[it.id].tool?`\n⚒${Math.max(0,it.dur|0)}`:''); cell.appendChild(count); }
+      ((idx)=>{ cell.addEventListener('click',()=>{ selectedSlot=idx; buildHotbar(); buildInventory(); }); })(i);
+      ui.invGrid.appendChild(cell); }
+  }
+
+  function buildCraftList(){ ui.craftList.innerHTML='';
+    const nearBench = State.structures.some(s=>s.type==='workbench' && Math.hypot(s.x+.5-State.player.x, s.y+.5-State.player.y)<3.5);
+    for (const r of Recipes){ if(r.station && r.station==='bench' && !nearBench) continue; const row=document.createElement('div'); row.className='recipe'; const left=document.createElement('div'); left.innerHTML = `<strong>${ItemInfo[r.out].name}</strong> ×${r.n} <div class="need">${Object.entries(r.need).map(([id,n])=>`${ItemInfo[id].name}×${n}`).join(' , ')}</div>`; const right=document.createElement('div'); const b=document.createElement('button'); b.className='btn acc'; b.textContent='作る'; b.onclick=()=>{ if(removeItems(State.inv, r.need)){ addItem(State.inv, r.out, r.n); buildInventory(); buildHotbar(); } else { b.textContent='不足'; setTimeout(()=>b.textContent='作る', 700); } }; right.appendChild(b); row.appendChild(left); row.appendChild(right); ui.craftList.appendChild(row); }
+  }
+
+  function buildBuildList(){ ui.buildList.innerHTML='';
+    const builds = [Item.CAMPFIRE, Item.WORKBENCH, Item.FURNACE, Item.CHEST, Item.FARM, Item.LAMP, Item.WALL_WOOD, Item.FLOOR_WOOD];
+    for (const id of builds){ const row=document.createElement('div'); row.className='recipe'; const left=document.createElement('div'); left.innerHTML = `<strong>${ItemInfo[id].name}</strong>`; const right=document.createElement('div'); const b=document.createElement('button'); b.className='btn acc'; b.textContent='ホットバーに追加'; b.onclick=()=>{ addItem(State.inv, id, 1); buildInventory(); buildHotbar(); }; right.appendChild(b); row.appendChild(left); row.appendChild(right); ui.buildList.appendChild(row); }
+  }
+
+  function updateSelectedInfo(){ const it=State.inv[selectedSlot]; if(!it){ ui.selectedInfo.textContent='—'; return; } const info=ItemInfo[it.id]; const tool=info.tool?` / ツール:${info.tool.type} (威力${info.tool.power})`:''; ui.selectedInfo.textContent=`${info.name} ×${it.n}${tool}`; }
+
+  // =============================
+  // Modals & Buttons
+  // =============================
+  function show(el, s){ el.classList.toggle('show', !!s); }
+  document.getElementById('btnCloseInv').onclick=()=>show(ui.invModal,false);
+  document.getElementById('btnCloseCraft').onclick=()=>show(ui.craftModal,false);
+  document.getElementById('btnCloseBuild').onclick=()=>show(ui.buildModal,false);
+  document.getElementById('btnHelp').onclick=()=>show(ui.helpModal,true);
+  document.getElementById('btnCloseHelp').onclick=()=>show(ui.helpModal,false);
+  document.getElementById('btnSort').onclick=()=>{ // simple sort by id
+    const items = State.inv.filter(Boolean).sort((a,b)=>a.id.localeCompare(b.id)); State.inv = items.concat(Array(INV_COLS*INV_ROWS-items.length).fill(null)); buildInventory(); buildHotbar(); };
+  document.getElementById('btnDrop').onclick=()=>{ const it=State.inv[selectedSlot]; if(it){ drop(State.player.x, State.player.y, it.id, it.n); State.inv[selectedSlot]=null; buildInventory(); buildHotbar(); } };
+  document.getElementById('btnSave').onclick=()=>saveGame();
+  document.getElementById('btnLoad').onclick=()=>loadGame();
+  document.getElementById('btnNew').onclick=()=>{ if(confirm('新しい島を生成します。現在の進行は保存されません。続行しますか？')) genWorld(Math.floor(Math.random()*1e9)); };
+
+  // Keybindings
+  window.addEventListener('keydown', e=>{
+    const k=e.key.toLowerCase();
+    if (k==='e'){ show(ui.invModal, !ui.invModal.classList.contains('show')); buildInventory(); }
+    if (k==='c'){ show(ui.craftModal, !ui.craftModal.classList.contains('show')); buildCraftList(); }
+    if (k==='b'){ show(ui.buildModal, !ui.buildModal.classList.contains('show')); }
+    if (k==='h'){ show(ui.helpModal, !ui.helpModal.classList.contains('show')); }
+    if (k>='1' && k<='9'){ selectedSlot = Math.min(HOTBAR_SIZE-1, parseInt(k)-1); buildHotbar(); updateSelectedInfo(); }
+  });
+
+  // =============================
+  // Save/Load
+  // =============================
+  function saveGame(){ const data = JSON.stringify(State); localStorage.setItem('island_crafter_save', data); alert('セーブしました'); }
+  function loadGame(){ const d = localStorage.getItem('island_crafter_save'); if(!d){ alert('セーブデータがありません'); return; } const s = JSON.parse(d);
+    // Reattach typed arrays
+    State.seed=s.seed; ui.seedlabel.textContent=String(State.seed);
+    State.time=s.time; State.day=s.day; State.season=s.season; State.weather=s.weather; State.player=s.player; State.inv=s.inv;
+    State.world.tiles = new Uint8Array(s.world.tiles); State.world.height = new Float32Array(s.world.height);
+    State.nodes = s.nodes; State.drops=s.drops; State.structures=s.structures;
+    rebuildUI(); drawMinimap(); }
+
+  // =============================
+  // Game Loop
+  // =============================
+  function step(dt){ // dt in seconds
+    // time
+    State.time += dt*10; if(State.time>=1440){ State.time-=1440; State.day++; if(State.day%15===0){ State.season=(State.season+1)%4; }
+      // random weather
+      State.weather = Math.random()<0.3 ? 1 : 0; ui.uiWeather.textContent = ['Clear','Rain'][State.weather]; document.getElementById('weather').textContent = ['Clear','Rain'][State.weather];
+    }
+
+    // player hunger/energy drain
+    const moving = Keys['w']||Keys['a']||Keys['s']||Keys['d'];
+    State.player.hunger = Math.max(0, State.player.hunger - (moving?0.006:0.002)*dt*60);
+    State.player.energy = Math.max(0, State.player.energy - (moving?0.004:0.001)*dt*60);
+    if (State.player.hunger<=0||State.player.energy<=0) State.player.hp = Math.max(0, State.player.hp - 0.01*dt*60);
+    if (State.player.hp<=0){ alert('体力が尽きました… 日付を進めて回復します'); State.player.hp=60; State.player.hunger=50; State.player.energy=50; State.day++; State.time=6*60; }
+
+    // weather effect on farms
+    if (State.weather===1 && Math.random()<0.01){ for(const s of State.structures){ if(s.type==='farm'){ s.data.growth = Math.min(1, (s.data.growth||0)+0.02); } } }
+
+    // movement
+    let vx=0, vy=0; if(Keys['w']) vy-=1; if(Keys['s']) vy+=1; if(Keys['a']) vx-=1; if(Keys['d']) vx+=1; const len=Math.hypot(vx,vy)||1; vx/=len; vy/=len; const sp=State.player.speed*(State.player.energy<15?0.6:1);
+    let nx = State.player.x + vx*sp*dt; let ny = State.player.y + vy*sp*dt;
+    // collision: water blocks
+    if (tileAt(nx|0, State.player.y|0)!==Tile.WATER) State.player.x=nx; if(tileAt(State.player.x|0, ny|0)!==Tile.WATER) State.player.y=ny;
+
+    // mouse actions
+    if (Mouse.down){ useLeftClick(); Mouse.down=false; }
+    if (Mouse.right){ useRightClick(); Mouse.right=false; }
+
+    // UI time/labels
+    const hh = Math.floor(State.time/60); const mm = Math.floor(State.time%60).toString().padStart(2,'0'); ui.time.textContent = `${hh.toString().padStart(2,'0')}:${mm}`; ui.day.textContent=State.day; ui.season.textContent=Seasons[State.season]; ui.uiSeason.textContent=Seasons[State.season];
+
+    pickDrops();
+
+    // farm growth passive
+    for (const s of State.structures){ if(s.type==='farm' && s.data.growth>0 && s.data.growth<1){ s.data.growth = Math.min(1, s.data.growth + 0.001*dt*60); } if((s.type==='campfire'||s.type==='furnace') && s.data.fuel>0){ s.data.fuel=Math.max(0, s.data.fuel - 0.002*dt*60); } }
+  }
+
+  let last=performance.now();
+  function loop(now){ const dt = Math.min(0.05, (now-last)/1000); last=now; step(dt); ctx.clearRect(0,0,W,H); drawWorld(); requestAnimationFrame(loop); }
+
+  // =============================
+  // Boot
+  // =============================
+  genWorld(Math.floor(Math.random()*1e9));
+  requestAnimationFrame(loop);
+  buildHotbar(); buildInventory(); buildCraftList(); drawMinimap();
+
+  // =============================
+  // Touch (basic support)
+  // =============================
+  let touchId=null; let lastTouch=null;
+  canvas.addEventListener('touchstart', e=>{ const t=e.changedTouches[0]; touchId=t.identifier; lastTouch={x:t.clientX,y:t.clientY}; e.preventDefault(); Mouse.down=true; });
+  canvas.addEventListener('touchmove', e=>{ const t=[...e.changedTouches].find(t=>t.identifier===touchId); if(!t) return; const dx=t.clientX-lastTouch.x, dy=t.clientY-lastTouch.y; lastTouch={x:t.clientX,y:t.clientY}; // swipe to move: set keys by angle
+    const a=Math.atan2(dy,dx); Keys['w']=false; Keys['a']=false; Keys['s']=false; Keys['d']=false; if(Math.hypot(dx,dy)>6){ const ax=Math.cos(a), ay=Math.sin(a); if(Math.abs(ax)>Math.abs(ay)){ Keys[ax>0?'d':'a']=true; } else { Keys[ay>0?'s':'w']=true; } } e.preventDefault(); });
+  canvas.addEventListener('touchend', e=>{ Keys['w']=Keys['a']=Keys['s']=Keys['d']=false; Mouse.down=false; });
+
+  </script>
+</body>
+</html>
